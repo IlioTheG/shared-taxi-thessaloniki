@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Who Shares a Ride?</title>
+<meta name="description" content="Interactive map of shared taxi trips in Thessaloniki over one day of ride requests.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="lib/leaflet/leaflet.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --ink: #222222;
+    --muted: #6b6b6b;
+    --line: #e6e4df;
+    --soft: #f4f2ed;
+    --req: #19a974;
+    --shared: #7a1cff;
+    --bar: #d9d6cf;
+    --shadow: 0 6px 24px rgba(0,0,0,.10);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { position: relative; height: 100%; }
+  #map { position: absolute; inset: 0; background: #e9e9e9; }
+
+  #panel { position: absolute; z-index: 1000; top: 16px; left: 16px; bottom: 16px; width: 360px;
+    background: var(--panel); border-radius: 14px; box-shadow: var(--shadow);
+    display: flex; flex-direction: column; overflow: hidden; }
+  #panel .scroll { overflow-y: auto; padding: 22px 22px 16px; }
+  #panel { bottom: auto; max-height: calc(100% - 32px); }
+  h1 { font-size: 26px; line-height: 1.15; margin: 0 0 6px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 0 0 18px; }
+  .label { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+
+  .range-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  #range-text { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #timebar { position: absolute; z-index: 1000; left: 392px; right: 16px; bottom: 16px;
+    background: var(--panel); border-radius: 14px; box-shadow: var(--shadow); padding: 14px 20px 10px; }
+  .range-head .label { margin-bottom: 2px; }
+  .controls { display: flex; gap: 8px; }
+  .btn { border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 999px;
+    padding: 6px 14px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+  .btn:hover { background: #ebe8e1; }
+  .hint { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+  .btn:focus-visible, .toggle input:focus-visible + span, input[type=range]:focus-visible { outline: 2px solid var(--shared); outline-offset: 2px; }
+
+  .timeline { position: relative; height: 92px; margin: 4px 0 2px; }
+  #hist { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 70px; display: block; }
+  .timeline input[type=range] { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 70px; margin: 0;
+    background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+  .timeline input[type=range]::-webkit-slider-thumb { pointer-events: auto; -webkit-appearance: none; width: 14px; height: 70px;
+    border-radius: 4px; background: rgba(34,34,34,.85); cursor: ew-resize; border: 3px solid #fff; }
+  .timeline input[type=range]::-moz-range-thumb { pointer-events: auto; width: 10px; height: 64px; border-radius: 4px;
+    background: rgba(34,34,34,.85); cursor: ew-resize; border: 3px solid #fff; }
+  .timeline input[type=range]::-webkit-slider-runnable-track { background: none; height: 70px; }
+  .timeline input[type=range]::-moz-range-track { background: none; }
+  .ticks span { position: absolute; top: 0; }
+  .ticks { position: absolute; left: 0; right: 0; top: 74px; height: 14px;
+    font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
+  .stat { background: var(--soft); border-radius: 10px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 12px; color: var(--muted); }
+
+  .toggles { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+  .toggle { display: flex; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
+  .toggle input { position: absolute; opacity: 0; }
+  .toggle span.box { width: 34px; height: 20px; border-radius: 999px; background: var(--bar); position: relative; flex: none; transition: background .15s; }
+  .toggle span.box::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .toggle input:checked + span.box { background: var(--ink); }
+  .toggle input:checked + span.box::after { left: 17px; }
+  .swatch { width: 18px; height: 4px; border-radius: 2px; flex: none; }
+
+  .note { font-size: 12px; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--line); padding-top: 12px; margin: 0; }
+  .note a { color: var(--ink); }
+
+  .leaflet-popup-content { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 13px; line-height: 1.45; margin: 12px 14px; }
+  .pop-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .pop-row { display: flex; justify-content: space-between; gap: 16px; }
+  .pop-row span:first-child { color: var(--muted); }
+
+
+  #loading { position: absolute; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.85); font-size: 14px; color: var(--muted); }
+
+  @media (max-width: 1000px) { .ticks .minor { display: none; } }
+  @media (max-width: 720px) {
+    #timebar { left: 0; right: 0; top: 0; bottom: auto; border-radius: 0 0 14px 14px; padding: 10px 12px 6px; }
+    #timebar .hint, #timebar .range-head .label { display: none; }
+    #range-text { font-size: 17px; }
+    .btn { padding: 5px 10px; font-size: 12px; }
+    .leaflet-top { top: 150px; }
+    #panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 52%; border-radius: 14px 14px 0 0; }
+    #panel .scroll { padding: 16px; }
+    h1 { font-size: 21px; }
+    .sub { display: none; }
+    .stats { grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 12px 0; }
+    .stat { padding: 8px; }
+    .stat b { font-size: 17px; }
+    .stat span { font-size: 11px; }
+    .leaflet-control-zoom { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map" aria-label="Map of shared taxi trips in Thessaloniki"></div>
+
+  <aside id="panel">
+    <div class="scroll">
+      <h1>Who Shares a Ride?</h1>
+      <p class="sub">One day of taxi requests in Thessaloniki. Requests made in the same 5 minutes were paired into shared trips when the detour was small enough. Each shared trip serves at most two passengers.</p>
+
+      <div class="stats">
+        <div class="stat"><b id="s-req">0</b><span>requests</span></div>
+        <div class="stat"><b id="s-shared">0</b><span>shared trips</span></div>
+        <div class="stat"><b id="s-rate">0%</b><span>of requests shared</span></div>
+        <div class="stat"><b id="s-km">0</b><span>vehicle-km saved</span></div>
+      </div>
+
+      <p class="label">Layers</p>
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" id="t-shared" checked><span class="box"></span><span class="swatch" style="background:var(--shared)"></span>Shared trips</label>
+        <label class="toggle"><input type="checkbox" id="t-stops" checked><span class="box"></span><span class="swatch" style="background:#222;height:8px;width:8px;border-radius:50%"></span>Pick-ups and drop-offs</label>
+        <label class="toggle"><input type="checkbox" id="t-req" checked><span class="box"></span><span class="swatch" style="background:var(--req)"></span>All requests</label>
+      </div>
+
+      <p class="note">Click a shared trip to see its two requests and how much distance sharing saved. Solid circles are pick-ups and hollow circles are drop-offs.<br><br>
+      All locations are anonymized. Every pick-up and drop-off was moved 150 to 500 m from its real position and all routes were recalculated on the road network, so the figures are for demonstration only.<br><br>
+      From the diploma thesis <i>Shared-mobility services and shared-taxi optimization</i>, Aristotle University of Thessaloniki, by Giorgos Iliopoulos.</p>
+    </div>
+  </aside>
+
+
+  <section id="timebar" aria-label="Time window">
+    <div class="range-head">
+      <div><p class="label">Time window</p><div id="range-text">08:00 to 08:05</div></div>
+      <div class="controls">
+        <button type="button" class="btn" id="back" aria-label="Move window 5 minutes earlier">&larr; 5 min</button>
+        <button type="button" class="btn" id="fwd" aria-label="Move window 5 minutes later">5 min &rarr;</button>
+        <button type="button" class="btn" id="play" aria-pressed="false">Play day</button>
+      </div>
+    </div>
+    <div class="timeline">
+      <svg id="hist" viewBox="0 0 180 70" preserveAspectRatio="none" aria-hidden="true"></svg>
+      <input id="start" type="range" min="0" max="180" step="1" value="0" aria-label="Start of time window">
+      <input id="end" type="range" min="0" max="180" step="1" value="1" aria-label="End of time window">
+      <div class="ticks"><span class="" style="left:0.000%;transform:translateX(0)">08:00</span><span class="minor" style="left:6.667%;transform:translateX(-50%)">09:00</span><span class="minor" style="left:13.333%;transform:translateX(-50%)">10:00</span><span class="" style="left:20.000%;transform:translateX(-50%)">11:00</span><span class="minor" style="left:26.667%;transform:translateX(-50%)">12:00</span><span class="minor" style="left:33.333%;transform:translateX(-50%)">13:00</span><span class="" style="left:40.000%;transform:translateX(-50%)">14:00</span><span class="minor" style="left:46.667%;transform:translateX(-50%)">15:00</span><span class="minor" style="left:53.333%;transform:translateX(-50%)">16:00</span><span class="" style="left:60.000%;transform:translateX(-50%)">17:00</span><span class="minor" style="left:66.667%;transform:translateX(-50%)">18:00</span><span class="minor" style="left:73.333%;transform:translateX(-50%)">19:00</span><span class="" style="left:80.000%;transform:translateX(-50%)">20:00</span><span class="minor" style="left:86.667%;transform:translateX(-50%)">21:00</span><span class="minor" style="left:93.333%;transform:translateX(-50%)">22:00</span><span class="" style="left:100.000%;transform:translateX(-100%)">23:00</span></div>
+    </div>
+    <p class="hint">Drag the two handles to set the start and end, or use the arrow keys after clicking a handle. Grey bars show all requests per 5 minutes and purple bars the shared ones.</p>
+  </section>
+
+  <div id="loading">Loading trips…</div>
+</div>
+
+<script src="lib/leaflet/leaflet.js"></script>
+<script src="lib/leaflet-ant-path/leaflet-ant-path.js"></script>
+<script>
+(() => {
+  const WINDOWS = 180;                           // 5-minute windows from 08:00 to 23:00
+  const PALETTE = ['#7a1cff','#e4572e','#0077b6','#d81e8a','#f29e02','#2a9d8f','#9b5de5','#c1121f','#3a86ff','#6a994e'];
+  const fmt = i => { const m = 8 * 60 + i * 5; return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+  const ll = p => [p[1], p[0]];
+
+  const map = L.map('map', { zoomControl: false, preferCanvas: false }).setView([40.618, 22.955], 13);
+  L.control.zoom({ position: 'topright' }).addTo(map);
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 16, maxZoom: 19,
+    attribution: 'Tiles &copy; Esri, HERE, Garmin &middot; Road network &copy; OpenStreetMap contributors'
+  }).addTo(map);
+  if (window.innerWidth > 720) map.panBy([-190, 70], { animate: false });
+
+  const canvas = L.canvas({ padding: 0.5 });
+  const reqLayer = L.layerGroup().addTo(map);
+  const sharedLayer = L.layerGroup().addTo(map);
+  const stopLayer = L.layerGroup().addTo(map);
+
+  const el = id => document.getElementById(id);
+  const startIn = el('start'), endIn = el('end');
+  let requests = [], shared = [], reqById = {};
+
+  Promise.all([fetch('data/requests.json').then(r => r.json()), fetch('data/shared_trips.json').then(r => r.json())])
+    .then(([rq, sh]) => {
+      requests = rq.rows.map(r => ({ id: r[0], w: r[1], o: r[2], d: r[3], t: r[4], len: r[5], path: r[6] }));
+      shared = sh.rows.map((r, i) => ({ id: r[0], w: r[1], method: r[2], r1: r[3], r2: r[4], o1: r[5], d1: r[6], o2: r[7], d2: r[8], t: r[9], len: r[10], path: r[11], color: PALETTE[i % PALETTE.length] }));
+      requests.forEach(r => reqById[r.id] = r);
+      drawHistogram();
+      render();
+      el('loading').remove();
+    })
+    .catch(() => { el('loading').textContent = 'Could not load the data. Open this page through a web server (for example GitHub Pages).'; });
+
+  function drawHistogram() {
+    const nReq = new Array(WINDOWS).fill(0), nSh = new Array(WINDOWS).fill(0);
+    requests.forEach(r => nReq[r.w]++);
+    shared.forEach(s => nSh[s.w] += 2);
+    const max = Math.max(...nReq);
+    const svg = el('hist');
+    let html = '';
+    for (let i = 0; i < WINDOWS; i++) {
+      const h = nReq[i] / max * 66, hs = nSh[i] / max * 66;
+      html += `<rect class="b" data-i="${i}" x="${i + 0.12}" y="${70 - h}" width="0.76" height="${h}" fill="var(--bar)"/>`;
+      html += `<rect class="s" data-i="${i}" x="${i + 0.12}" y="${70 - hs}" width="0.76" height="${hs}" fill="var(--shared)" opacity=".35"/>`;
+    }
+    svg.innerHTML = '<rect id="band" x="0" y="0" width="0" height="70" fill="#7a1cff" opacity=".08"/>' + html;
+  }
+
+  function paintHistogram(a, b) {
+    const band = el('band'); if (band) { band.setAttribute('x', a); band.setAttribute('width', b - a); }
+    el('hist').querySelectorAll('rect').forEach(r => {
+      const i = +r.dataset.i, on = i >= a && i < b;
+      if (r.classList.contains('b')) r.setAttribute('fill', on ? '#9c978c' : 'var(--bar)');
+      else r.setAttribute('opacity', on ? '1' : '.35');
+    });
+  }
+
+  function popup(s) {
+    const a = reqById[s.r1], b = reqById[s.r2];
+    const saved = (a.len + b.len - s.len) / 1000;
+    const row = (k, v) => `<div class="pop-row"><span>${k}</span><span>${v}</span></div>`;
+    return `<div class="pop-title">Shared trip ${s.id}</div>` +
+      row('Requests', `${s.r1} + ${s.r2}`) +
+      row('Window', `${fmt(s.w)} to ${fmt(s.w + 1)}`) +
+      row('Stop order', s.method === 'FIFO' ? 'first in, first out' : 'first in, last out') +
+      row('Shared route', `${(s.len / 1000).toFixed(1)} km, ${Math.round(s.t / 60)} min`) +
+      row('Two solo routes', `${((a.len + b.len) / 1000).toFixed(1)} km`) +
+      (saved >= 0 ? row('Distance saved', `${saved.toFixed(1)} km`) : row('Extra distance', `${(-saved).toFixed(1)} km`));
+  }
+
+  function render() {
+    let a = +startIn.value, b = +endIn.value;
+    if (b <= a) { if (document.activeElement === startIn) { a = b - 1; startIn.value = a; } else { b = a + 1; endIn.value = b; } }
+    el('range-text').textContent = `${fmt(a)} to ${fmt(b)}`;
+    paintHistogram(a, b);
+
+    reqLayer.clearLayers(); sharedLayer.clearLayers(); stopLayer.clearLayers();
+    const reqs = requests.filter(r => r.w >= a && r.w < b);
+    const trips = shared.filter(s => s.w >= a && s.w < b);
+
+    reqs.forEach(r => {
+      L.polyline(r.path.map(ll), { renderer: canvas, color: '#19a974', weight: 2, opacity: .35, interactive: false }).addTo(reqLayer);
+      L.circleMarker(ll(r.o), { renderer: canvas, radius: 2.5, color: '#19a974', weight: 0, fillOpacity: .7, interactive: false }).addTo(reqLayer);
+    });
+
+    let saved = 0;
+    trips.forEach(s => {
+      const p = s.path.map(ll);
+      const ant = L.polyline.antPath(p, {
+        color: s.color, pulseColor: '#ffffff', weight: 4, opacity: 1,
+        delay: 3200, dashArray: [10, 20], hardwareAccelerated: true
+      }).addTo(sharedLayer);
+      ant.bindPopup(popup(s))
+        .on('mouseover', () => ant.setStyle({ weight: 7 }))
+        .on('mouseout', () => ant.setStyle({ weight: 4 }));
+      [[s.o1, 1], [s.o2, 1], [s.d1, 0], [s.d2, 0]].forEach(([pt, isPick]) =>
+        L.circleMarker(ll(pt), { radius: 5, color: s.color, weight: 2, fillColor: isPick ? s.color : '#fff', fillOpacity: 1 })
+          .bindPopup(popup(s)).addTo(stopLayer));
+      saved += reqById[s.r1].len + reqById[s.r2].len - s.len;
+    });
+
+    el('s-req').textContent = reqs.length.toLocaleString('en');
+    el('s-shared').textContent = trips.length.toLocaleString('en');
+    el('s-rate').textContent = reqs.length ? Math.round(trips.length * 2 / reqs.length * 100) + '%' : '0%';
+    el('s-km').textContent = Math.max(0, Math.round(saved / 1000)).toLocaleString('en');
+    applyToggles();
+  }
+
+  function applyToggles() {
+    [[el('t-shared'), sharedLayer], [el('t-stops'), stopLayer], [el('t-req'), reqLayer]].forEach(([box, layer]) => {
+      if (box.checked && !map.hasLayer(layer)) layer.addTo(map);
+      if (!box.checked && map.hasLayer(layer)) map.removeLayer(layer);
+    });
+  }
+
+  startIn.addEventListener('input', render);
+  endIn.addEventListener('input', render);
+  ['t-shared', 't-stops', 't-req'].forEach(id => el(id).addEventListener('change', applyToggles));
+
+  function shift(step) {
+    const width = +endIn.value - +startIn.value;
+    const a = Math.min(Math.max(+startIn.value + step, 0), WINDOWS - width);
+    startIn.value = a; endIn.value = a + width; render();
+  }
+  el('back').addEventListener('click', () => shift(-1));
+  el('fwd').addEventListener('click', () => shift(1));
+
+  // Play through the day, keeping the current window width
+  let timer = null;
+  el('play').addEventListener('click', () => {
+    const btn = el('play');
+    if (timer) { clearInterval(timer); timer = null; btn.textContent = 'Play day'; btn.setAttribute('aria-pressed', 'false'); return; }
+    btn.textContent = 'Pause'; btn.setAttribute('aria-pressed', 'true');
+    timer = setInterval(() => {
+      const width = +endIn.value - +startIn.value;
+      let a = +startIn.value + 1;
+      if (a + width > WINDOWS) a = 0;
+      startIn.value = a; endIn.value = a + width;
+      render();
+    }, 900);
+  });
+})();
+</script>
+</body>
+</html>
